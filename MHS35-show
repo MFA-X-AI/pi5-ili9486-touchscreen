@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Entry point matching LCD-show's invocation:
+#   sudo ./MHS35-show [0|90|180|270]
+# Installs the panel via the DRM/Wayland path (wraps setup.sh).
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+
+rot="${1:-90}"
+case "$rot" in
+  0|90|180|270) ;;
+  *) die "Usage: sudo ./MHS35-show [0|90|180|270]   (default 90, like LCD-show)" ;;
+esac
+
+# LCD-show's default orientation is '90' (landscape). Our known-good pair for
+# that is: panel-level rotate=90 + compositor transform 270. Other requested
+# rotations shift the compositor transform by the same amount.
+export OUTPUT_TRANSFORM_OVERRIDE=$(( (270 + rot - 90 + 360) % 360 ))
+require_root
+mkdir -p "$(dirname "$TRANSFORM_STATE")"
+echo "$OUTPUT_TRANSFORM_OVERRIDE" > "$TRANSFORM_STATE"
+
+exec "$SCRIPT_DIR/setup.sh"
