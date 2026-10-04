@@ -13,6 +13,9 @@
 #   5. Removes the getty@tty1 autologin drop-in that races the display manager.
 #   6. Points LightDM back at the Wayland session (Pi Connect requires Wayland).
 #   7. Quarantines stray X11 calibration/fbturbo configs and LCD-show .dtbo files.
+#   8. Purges the 32-bit (armhf) X11 packages the installer force-installs with
+#      `dpkg -i`. They can never finish installing on a 64-bit system, and while
+#      they sit half-installed every `apt install` fails with unmet dependencies.
 #
 # Everything modified is backed up first (*.bak-<timestamp>). Idempotent.
 # The vendor's own system_restore.sh does NOT do most of this and may restore
@@ -112,6 +115,23 @@ for dtbo in /boot/firmware/overlays/mhs35*.dtbo /boot/firmware/overlays/waveshar
   fi
 done
 [ -d "$quarantine" ] && log "Quarantined files kept in $quarantine (delete when happy)"
+
+## 8. Half-installed armhf packages from the installer's bundled .debs
+# Only these two, and only when not properly installed (dpkg status other than "ii").
+# Both are X11-only and unused under Wayland. Do NOT use `apt --fix-broken install`
+# instead: it tries to complete them by pulling in a 32-bit library stack and
+# upgrading core packages (libc6, systemd, udev).
+broken=()
+for pkg in xinput-calibrator:armhf xserver-xorg-input-evdev:armhf; do
+  state="$(dpkg-query -W -f='${db:Status-Abbrev}' "$pkg" 2>/dev/null || true)"
+  if [ -n "$state" ] && [ "${state:0:2}" != "ii" ] && [ "${state:0:2}" != "un" ]; then
+    broken+=("$pkg")
+  fi
+done
+if [ "${#broken[@]}" -gt 0 ]; then
+  dpkg --purge "${broken[@]}"
+  log "Purged half-installed armhf packages: ${broken[*]} (apt works again)"
+fi
 
 echo
 log "Recovery complete. Reboot now: sudo reboot"

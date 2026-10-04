@@ -26,7 +26,7 @@ log "Panel already registered as $OUTPUT_NAME — verifying (step 2)."
 "$SCRIPT_DIR/steps/02-verify-boot.sh"
 
 echo
-printf 'Calibrate touch interactively now? (recommended; N uses the known-good default matrix) [Y/n] '
+printf 'Calibrate touch now with on-screen crosshairs? (recommended; needs the desktop showing on the panel. N uses the default matrix measured on one MHS35) [Y/n] '
 read -r ans
 if [ "${ans,,}" != "n" ]; then
   "$SCRIPT_DIR/steps/03-calibrate-touch.sh"

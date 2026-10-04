@@ -60,6 +60,8 @@ You need: a Raspberry Pi 5, a microSD card (16 GB+), the official power supply, 
    sudo apt install -y git wlr-randr libinput-tools
    ```
 
+   Touch calibration also uses `chromium` and `python3`, which the desktop image already includes.
+
 ## Part 1: panel install
 
 ```bash
@@ -73,7 +75,7 @@ sudo ./MHS35-show      # second run: verifies, calibrates touch, persists
 
 (Substitute your panel's command from the table above.)
 
-The second run walks you through a 4-corner touch calibration — tap each corner of the panel when prompted. After logging out and back in (or rebooting), the panel is a second monitor: landscape, scaled, calibrated touch, persisted across reboots.
+The second run calibrates touch: a page with red crosshairs opens on the panel, and you tap the centre of each cross, 10 taps in all (see [Touch calibration](#touch-calibration)). Run it with the desktop showing on the panel. After logging out and back in (or rebooting), the panel is a second monitor: landscape, scaled, calibrated touch, a usable refresh rate, all persisted across reboots.
 
 ### All commands
 
@@ -89,7 +91,7 @@ The second run walks you through a 4-corner touch calibration — tap each corne
 
 ### Recovering from LCD-show
 
-If you already ran an LCD-show installer and the system is misbehaving (console boot, 480×320 HDMI, missing PATH entries):
+If you already ran an LCD-show installer and the system is misbehaving (console boot, 480×320 HDMI, missing PATH entries, or every `apt install` failing with unmet dependencies):
 
 ```bash
 sudo ./recover-from-lcd-show.sh
@@ -109,25 +111,52 @@ sudo ./MHS35-show
 |---|---|---|
 | Panel + touch driver | `/boot/firmware/config.txt` ([docs](https://www.raspberrypi.com/documentation/computers/config_txt.html)) | `dtoverlay=piscreen,drm,speed=32000000,rotate=90` in a marker-delimited block |
 | Touch calibration | `/etc/udev/hwdb.d/61-spi-lcd-touch.hwdb` ([hwdb docs](https://www.freedesktop.org/software/systemd/man/latest/hwdb.html)) | [`LIBINPUT_CALIBRATION_MATRIX`](https://wayland.freedesktop.org/libinput/doc/latest/absolute-axes.html#calibration-of-absolute-devices), keyed to the ADS7846's bus/vendor/product ID |
-| Rotation + scale | `~/.config/labwc/autostart` | [`wlr-randr`](https://gitlab.freedesktop.org/emersion/wlr-randr)` --output SPI-1 --transform 270 --scale 0.75 &` |
+| Refresh rate, rotation, scale | `~/.config/labwc/autostart` | [`wlr-randr`](https://gitlab.freedesktop.org/emersion/wlr-randr)` --output SPI-1 --custom-mode 320x480@30Hz --transform 270 --scale 0.75 &` (see [Refresh rate](#refresh-rate)) |
 | Touch → panel mapping | `~/.config/labwc/rc.xml` ([docs](https://labwc.github.io/labwc-config.5.html#touch)) | `<touch deviceName="ADS7846 Touchscreen" mapToOutput="SPI-1" />`, so touch stays on the panel when HDMI is also connected |
 
 Every file touched is backed up first (`*.bak-<timestamp>`), all inserted blocks are marker-delimited, and the scripts are idempotent. `./uninstall.sh` removes all of them.
 
-Tunables (rotation, scale, SPI speed, default calibration matrix) are in [`defaults.env`](defaults.env).
+Tunables (rotation, mode, scale, SPI speed, default calibration matrix) are in [`defaults.env`](defaults.env).
 
 ## Touch calibration
 
-`steps/03-calibrate-touch.sh` runs a 4-corner procedure:
+`sudo steps/03-calibrate-touch.sh` opens a full-screen page on the panel with a red crosshair at 5 known positions (four near the corners, one in the centre) and reads your taps from `libinput debug-events`. It shows the 5 crosshairs twice:
 
-1. Captures each corner tap via `libinput debug-events` (coordinates in % of screen).
-2. Rounds the measured extremes outward (taps never reach the exact corner).
-3. Computes the affine matrix libinput expects:
-   `scale_x = 100/(xmax−xmin)`, `offset_x = −xmin/(xmax−xmin)` (same for y).
+1. **Calibrate.** The first 5 taps are fitted to a full affine matrix (all 6 terms) by [`lib/touch_fit.py`](lib/touch_fit.py), using least squares.
+2. **Check.** The second 5 taps are used to measure that matrix. Below about 2.5% of the screen (≈ 10 px) rms is good; above that, run it again.
 
-Skipping calibration (`setup.sh` → answer `n`) uses the default matrix in `defaults.env`, measured on an MHS35 unit. Resistive panels vary between units; measuring is recommended.
+The result appears on the panel, with each check target and a dot where your tap lands under the new matrix, and in the terminal, with per-tap errors. Tap the panel once more to close it.
 
-Note: on some builds `libinput debug-events` prints pre-calibration coordinates even when a matrix is active. Verify with `sudo libinput list-devices` — digits on the `Calibration:` line (rather than `identity matrix`) mean the matrix is applied.
+Tap with a stylus (touch pen): it's a resistive panel, and a fingertip's contact area is too broad to hit the centre of a cross. The matrix goes to `calibration.env`, and `steps/04-persist.sh` installs it.
+
+Skipping calibration (`setup.sh` → answer `n`) uses the default matrix in `defaults.env`, measured on one MHS35 unit with the default rotation. Resistive panels vary between units; measuring is recommended.
+
+### Why a full fit: the touch axes can be swapped
+
+On the MHS35 this was tested on, an uncorrected panel has **touch mirrored across the diagonal**: tapping top-left registers at bottom-right and vice versa, while top-right and bottom-left are roughly right, so taps near the middle seem only "a bit off". The `piscreen` overlay's `rotate=90` sets `touchscreen-swapped-x-y` on the touch controller. For this panel that flips the touch the other way round from the display, and combined with the compositor's rotation it produces a mirror image.
+
+A mirror can't be fixed by scale and offset alone (a diagonal matrix). It needs the off-diagonal terms, which is why the fit uses all 6, e.g. the default `0.00271 1.12558 -0.04919 1.11325 0.00444 -0.06729`. A loaded matrix is also no proof the matrix is right, so the check round measures where taps actually land: on the test unit, 0.73% of the screen (~3 px) rms.
+
+### How the coordinates fit together
+
+- **`libinput debug-events` prints raw positions**: in % of the touch device, *before* any installed matrix is applied (verified on Trixie). So calibrating doesn't depend on whatever matrix is installed, and the fitted matrix replaces it outright. If you fit by hand, don't multiply the result onto the installed matrix: that counts it twice, which shows up as every corner landing too far outwards.
+- **The matrix maps raw touch to the panel's native (unrotated) output.** labwc then applies the output transform (`--transform 270`) to touch, the same as to the picture. The fit converts each target from screen to native coordinates for the current transform. Because of that, changing the compositor rotation later (`rotate.sh`) should not need recalibrating.
+- `sudo libinput list-devices` shows the active matrix on the `Calibration:` line. Digits there (rather than `identity matrix`) mean the hwdb matrix is applied. libinput reads it when the device is opened, so log out/in or reboot after changing it.
+
+## Refresh rate
+
+The `ili9486` driver doesn't report a real refresh rate. `wlr-randr` shows a placeholder: `320x480 px, 0.007000 Hz`. Applications that pace their drawing by the refresh rate take it literally: **Chromium draws about once per second**, so every animation runs at ~1 fps.
+
+`steps/04-persist.sh` therefore sets a real mode, `--custom-mode 320x480@30Hz` (`OUTPUT_MODE` in `defaults.env`). Measured with a `requestAnimationFrame` test page in Chromium at 480×320:
+
+| Output mode | Full-screen repaint | Small moving element | Idle |
+|---|---|---|---|
+| Driver default (0.007 Hz) | 0.8 fps | 0.9 fps | 0.9 fps |
+| `--custom-mode 320x480@30Hz` | **10.7 fps** | **26.7 fps** | 28.7 fps |
+
+Chromium's `--disable-gpu-vsync --disable-frame-rate-limit` flags are not a fix: they make it redraw thousands of times per second, which spins the CPU (and heats the Pi) without the panel showing any more.
+
+10.7 fps for a full repaint is the bus limit: a 480×320 frame at 16 bits per pixel is ~2.5 Mbit, and 32 MHz SPI moves about 13 of those per second before overhead. Only the changed region is sent, so small updates (a progress bar, a button highlight) get close to the 30 Hz pace. For smooth-looking UI on this panel, animate small regions rather than the whole screen.
 
 ## How it works
 
@@ -142,11 +171,12 @@ LCD-show forces X11, disables KMS, and pins HDMI at 480×320 because its design 
 
 ## Limitations
 
-- The panel sustains roughly 15–25 FPS over SPI at 32 MHz. This is the bus bandwidth limit. Suitable for status displays and controls, not video.
-- Touch accuracy on a 3.5" resistive panel is limited by tap-target size at scale 0.75, SPI latency, and parallax from the gap between touch layer and LCD. If taps land off-target after calibration, try `OUTPUT_SCALE=1` (or 0.85–0.9) in `defaults.env` and re-run `sudo steps/04-persist.sh` (this keeps your measured calibration).
-- Rotation/scale persistence targets labwc (Trixie's compositor). On Bookworm/Wayfire, add the same `wlr-randr` line to Wayfire's autostart instead.
-- Only the default rotation (`90`) has been verified on hardware. `0`, `180` and `270` rotate the display by offsetting the compositor transform, but touch input is not re-mapped, so taps will likely land in the wrong place at those rotations. To set a transform directly: `sudo OUTPUT_TRANSFORM_OVERRIDE=<0|90|180|270> steps/04-persist.sh` (this is also saved for later runs).
-- Tested on one MHS35 unit on a Pi 5 / Trixie. Other panels in the table share the pinout but have not been verified — issue reports welcome.
+- Full-screen repaints top out at about 11 fps over SPI at 32 MHz; small changes reach close to 30 fps (see [Refresh rate](#refresh-rate)). Suitable for status displays, controls and kiosk UIs, not video.
+- If taps land clearly in the wrong place (especially mirrored: top-left registering bottom-right), the matrix is wrong. Re-run `sudo steps/03-calibrate-touch.sh`; the check round shows the remaining error. Small leftover offsets on a 3.5" resistive panel come from tap-target size (smaller at scale 0.75) and parallax between the touch layer and the LCD.
+- Mode/rotation/scale persistence targets labwc (Trixie's compositor). On Bookworm/Wayfire, add the same `wlr-randr` line to Wayfire's autostart instead.
+- Only the default rotation (`90`) has been verified on hardware. `0`, `180` and `270` rotate the display by offsetting the compositor transform. labwc rotates touch input with it, so a calibration from `steps/03-calibrate-touch.sh` should stay valid, but this is untested; re-run calibration if taps land wrong. To set a transform directly: `sudo OUTPUT_TRANSFORM_OVERRIDE=<0|90|180|270> steps/04-persist.sh` (this is also saved for later runs).
+- Using the panel for a full-screen Chromium kiosk needs a few extra settings (scale 1, keyring prompt, touch scrolling): see [docs/chromium-kiosk.md](docs/chromium-kiosk.md).
+- Tested on one MHS35 unit on a Pi 5 / Trixie (kernel 6.12). Other panels in the table share the pinout but have not been verified — issue reports welcome.
 
 ## Troubleshooting
 
@@ -155,6 +185,8 @@ LCD-show forces X11, disables KMS, and pins HDMI at 480×320 because its design 
 - A `~/.bash_profile` you did not create suppresses `~/.bashrc`/`~/.profile` in login shells, removing user PATH entries.
 - `ps -eo tty,pid,cmd | awk '$1=="tty1"'` shows any display session running outside the display manager.
 - The `piscreen` overlay includes its own touch controller. A separate `dtoverlay=ads7846` line conflicts on the SPI chipselect and pen IRQ, and both fail to probe.
+- Every `apt install` failing with "unmet dependencies" for `xinput-calibrator:armhf` / `xserver-xorg-input-evdev:armhf` is LCD-show residue: the installer force-installs 32-bit `.deb`s that can never finish installing on a 64-bit system. `recover-from-lcd-show.sh` purges just those two. Avoid `apt --fix-broken install`: it tries to complete them by pulling in a 32-bit library stack and core upgrades (libc6, systemd, udev).
+- Animations in a browser crawling at ~1 fps: the output is still on the driver's 0.007 Hz placeholder mode (`wlr-randr` shows it). See [Refresh rate](#refresh-rate).
 
 Full reference: [docs/lcd-show-issues.md](docs/lcd-show-issues.md).
 

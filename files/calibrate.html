@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Touch calibration</title>
+<!-- Shown full-screen on the panel by steps/03-calibrate-touch.sh. The script reads the
+     taps from libinput and does the maths; this page shows where to tap, then the result,
+     which the script writes next to this file as results.js. Targets are fractions of the
+     screen and must match TARGETS in steps/03-calibrate-touch.sh. -->
+<style>
+html,body{margin:0;height:100%;background:#111;color:#eee;font:16px sans-serif;overflow:hidden;user-select:none;cursor:none;touch-action:none}
+#msg{position:absolute;left:0;right:0;top:38%;text-align:center;pointer-events:none;padding:0 12px}
+#msg b{display:block;margin-bottom:6px;font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:#ff8a8a}
+.x{position:absolute;width:40px;height:40px;margin:-20px 0 0 -20px;pointer-events:none}
+.x:before,.x:after{content:"";position:absolute;background:#ff3b3b}
+.x:before{left:19px;top:0;width:2px;height:40px}.x:after{top:19px;left:0;height:2px;width:40px}
+.x.small{width:20px;height:20px;margin:-10px 0 0 -10px;opacity:.8}
+.x.small:before{left:9px;height:20px}.x.small:after{top:9px;width:20px}
+.dot{position:absolute;width:10px;height:10px;margin:-5px 0 0 -5px;border-radius:50%;background:#2dd4bf}
+#res{position:absolute;left:0;right:0;top:22%;text-align:center;display:none;padding:0 16px}
+#res h1{margin:0 0 6px;font-size:24px}#res p{margin:4px 0;color:#bbb;font-size:14px}
+#res .good{color:#2dd4bf}#res .poor{color:#fbbf24}
+#close{position:absolute;left:0;right:0;bottom:8%;text-align:center;color:#888;font-size:13px;display:none}
+</style></head><body>
+<div id="msg"></div><div id="x" class="x"></div><div id="res"></div><div id="close">Tap anywhere to close</div>
+<script>
+const T=[[.1,.1],[.9,.1],[.9,.9],[.1,.9],[.5,.5]];
+// Round 1 fits the matrix, round 2 (same targets) measures it. No pause between rounds:
+// the script counts every tap, so the page must too.
+const ROUNDS=['Calibrating','Checking accuracy'];
+const TOTAL=T.length*ROUNDS.length;
+const x=document.getElementById('x'),msg=document.getElementById('msg');
+let i=0,last=0;
+function show(){
+  const r=Math.floor(i/T.length),k=i%T.length;
+  x.style.left=(T[k][0]*100)+'%';x.style.top=(T[k][1]*100)+'%';
+  msg.innerHTML='<b>Step '+(r+1)+' of '+ROUNDS.length+' · '+ROUNDS[r]+'</b>Tap the centre of the red cross with a stylus<br>(tap '+(i+1)+' of '+TOTAL+')';
+  msg.style.top=k==4?'60%':'38%';
+}
+show();
+addEventListener('pointerdown',()=>{const now=performance.now();if(now-last<700)return;last=now;   // same debounce as touch_fit.py
+  if(i>=TOTAL)return;   // after the result, the script closes the page on the next tap
+  if(++i<TOTAL){show();return;}
+  x.style.display='none';msg.style.top='42%';msg.textContent='Calculating…';
+  poll();
+});
+
+// The script writes results.js when it is done. A <script> tag can load a file:// file
+// from a file:// page (fetch cannot), so reload it until showResults() is called.
+let polls=0;
+function poll(){
+  if(window.done)return;
+  if(++polls>60){msg.textContent='No result received — see the terminal.';return;}
+  const s=document.createElement('script');
+  s.src='results.js?'+Date.now();
+  s.onerror=()=>{s.remove();setTimeout(poll,500)};
+  s.onload=()=>{s.remove();if(!window.done)setTimeout(poll,500)};
+  document.body.appendChild(s);
+}
+function showResults(r){
+  window.done=true;
+  msg.style.display='none';
+  // Each cross is a check-round target; each dot is where that tap lands with the new calibration.
+  for(const [u,v,a,b] of r.points){
+    const c=document.createElement('div');c.className='x small';c.style.left=(u*100)+'%';c.style.top=(v*100)+'%';document.body.appendChild(c);
+    const d=document.createElement('div');d.className='dot';d.style.left=(a*100)+'%';d.style.top=(b*100)+'%';document.body.appendChild(d);
+  }
+  const px=Math.round(r.rms/100*Math.sqrt((innerWidth*innerWidth+innerHeight*innerHeight)/2));
+  const res=document.getElementById('res');
+  res.innerHTML=r.good
+    ?'<h1 class="good">Touch calibrated</h1><p>Taps land within about '+px+' px ('+r.rms.toFixed(1)+'% of the screen).</p><p>Dots show where your check taps land.</p>'
+    :'<h1 class="poor">Calibration is not accurate</h1><p>Taps were off by about '+px+' px ('+r.rms.toFixed(1)+'% of the screen).</p><p>Run the calibration again and tap the cross centres carefully.</p>';
+  res.style.display='block';
+  document.getElementById('close').style.display='block';
+}
+</script></body></html>

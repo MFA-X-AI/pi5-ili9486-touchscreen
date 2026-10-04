@@ -2,3 +2,8 @@
 *.sh text eol=lf
 *.env text eol=lf
 files/* text eol=lf
+*.py text eol=lf
+# Extensionless scripts run on the Pi too; keep them LF even in a Windows checkout.
+MHS35-show text eol=lf
+LCD35-show text eol=lf
+LCD-hdmi text eol=lf

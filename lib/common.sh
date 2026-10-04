@@ -92,6 +92,33 @@ remove_block() {
   cat "$tmp" > "$f"; rm -f "$tmp"
 }
 
+# Run a command as the desktop user inside their running Wayland session
+# (needs the session to be up: wlr-randr, chromium). Usage: in_session <user> cmd...
+in_session() {
+  local u="$1"; shift
+  local uid s sock=""
+  uid="$(id -u "$u")"
+  # A glob, not find: find exits non-zero on unreadable entries (e.g. the document
+  # portal mount), which under `set -e -o pipefail` silently kills the caller.
+  for s in /run/user/"$uid"/wayland-[0-9]; do
+    [ -S "$s" ] && { sock="$s"; break; }
+  done
+  [ -n "$sock" ] || die "No Wayland session found for $u — log in on the desktop first."
+  sudo -u "$u" env XDG_RUNTIME_DIR="/run/user/$uid" WAYLAND_DISPLAY="$(basename "$sock")" "$@"
+}
+
+# Current compositor transform of the panel output, as wlr-randr names it
+# (normal, 90, 180, 270, flipped-*). Empty if it cannot be read.
+current_transform() {
+  in_session "$1" wlr-randr 2>/dev/null \
+    | awk -v o="$OUTPUT_NAME" '$1 == o { on = 1; next } /^[^ ]/ { on = 0 } on && /Transform:/ { print $2; exit }'
+}
+
+# Chromium's binary name differs between releases (chromium on Trixie).
+chromium_bin() {
+  command -v chromium || command -v chromium-browser || true
+}
+
 # hwdb modalias match for the ADS7846 touch controller, derived from its
 # actual bus/vendor/product IDs (e.g. evdev:input:b001Cv0000p1EA6*).
 touch_hwdb_match() {

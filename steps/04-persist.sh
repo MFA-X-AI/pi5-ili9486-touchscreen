@@ -70,11 +70,13 @@ autostart="$home_dir/.config/labwc/autostart"
 
 mkdir -p "$(dirname "$autostart")"
 backup_file "$autostart"
+mode_arg=""
+[ -n "${OUTPUT_MODE:-}" ] && mode_arg="--custom-mode $OUTPUT_MODE "
 block="$AUTOSTART_BEGIN
-wlr-randr --output $OUTPUT_NAME --transform $OUTPUT_TRANSFORM --scale $OUTPUT_SCALE &
+wlr-randr --output $OUTPUT_NAME ${mode_arg}--transform $OUTPUT_TRANSFORM --scale $OUTPUT_SCALE &
 $AUTOSTART_END"
 write_block "$autostart" "$AUTOSTART_BEGIN" "$AUTOSTART_END" "$block"
-log "Rotation/scale persisted to $autostart (runs at labwc session start)"
+log "Mode/rotation/scale persisted to $autostart (runs at labwc session start)"
 
 ## --- Touch -> panel output mapping via labwc rc.xml -----------------------
 # Without this, labwc maps the touchscreen across the whole desktop when an
@@ -115,6 +117,6 @@ if libinput list-devices 2>/dev/null | grep -A20 'ADS7846' | grep -q 'Calibratio
 else
   warn "Could not confirm calibration via 'libinput list-devices' — check manually."
 fi
-log "Done. Log out/in (or reboot) for calibration, rotation and scale to apply."
-log "Note: 'libinput debug-events' may still print PRE-calibration coordinates"
-log "on some builds — 'libinput list-devices' is the source of truth."
+log "Done. Log out/in (or reboot) for calibration, mode, rotation and scale to apply."
+log "Note: 'libinput debug-events' prints raw (pre-calibration) coordinates —"
+log "'libinput list-devices' shows the active matrix."

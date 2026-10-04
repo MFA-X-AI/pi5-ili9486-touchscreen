@@ -14,6 +14,7 @@ addresses it.
 | 3 | Replaces `/boot/firmware/config.txt` with a legacy template | `dtoverlay=vc4-kms-v3d` commented out (no KMS), modern defaults dropped, HDMI forced to 480×320 via `hdmi_cvt`/`hdmi_mode=87` | Stock template reinstalled |
 | 4 | Installs an `fbtft` overlay (`mhs35`/`waveshare35a`) and builds `rpi-fbcp` | `fbcp` requires the DispmanX API, which was removed on Pi 5 — the panel cannot work through this path at all | Overlay lines removed; `fbcp`/`con2fbmap` stripped from `/etc/rc.local`; stray `.dtbo` files quarantined |
 | 5 | Overwrites `~/.bash_profile` with a `startx` stub | Bash login shells prefer `~/.bash_profile` and skip `~/.bashrc`/`~/.profile`, so user PATH entries (nvm, `~/.local/bin`, npm globals) silently disappear; the stub's `startx` also races the display manager | Stub deleted (backed up first) |
+| 6 | Force-installs bundled 32-bit `.deb`s with `dpkg -i -B` (`xserver-xorg-input-evdev_…_armhf.deb`, `xinput-calibrator_…_armhf.deb`) | Their 32-bit dependencies are absent on a 64-bit system, so they stay half-installed (`iU` in `dpkg -l`). From then on **every `apt install` fails** with unmet dependencies, and the system stops taking updates. `apt --fix-broken install` "repairs" it by pulling in a 32-bit library stack and upgrading libc6/systemd/udev | `dpkg --purge` of just those two packages; both are X11-only and unused under Wayland |
 
 ## Why the vendor `system_restore.sh` is insufficient
 
@@ -39,6 +40,7 @@ Symptoms that indicate LCD-show residue, and how to check for it
 | `rpi-connect-wayvnc.service` restarting every ~5 s in the journal | `journalctl -b -p err` | No Wayland compositor is running. `rpi-connect status` reporting `Screen sharing: allowed` only confirms a session file exists, not a running compositor |
 | CLI tools missing from PATH after login | `cat ~/.bash_profile` | Installer stub (`FRAMEBUFFER=/dev/fb1` + `startx`) is suppressing `~/.bashrc`/`~/.profile` |
 | HDMI stuck at 480×320 | `grep -E 'hdmi_cvt\|hdmi_mode=87' /boot/firmware/config.txt` | Forced legacy HDMI mode for the `fbcp` copy path |
+| Every `apt install` fails with unmet dependencies | `dpkg -l \| grep armhf` | `iU` on `xinput-calibrator:armhf` / `xserver-xorg-input-evdev:armhf`: the installer's bundled 32-bit `.deb`s, half-installed |
 | Panel dark despite install | n/a on Pi 5 | The `fbcp` pipeline depends on DispmanX, removed on Pi 5 |
 
 ## Touch controller conflict (applies to manual setups too)
@@ -62,13 +64,22 @@ input: ADS7846 Touchscreen as /devices/.../input/input5
 
 ## Calibration verification
 
-On some builds `libinput debug-events` prints pre-calibration coordinates
-even when a matrix is active. Verify calibration with
-`sudo libinput list-devices` and read the `Calibration:` line; digits there
+`libinput debug-events` prints raw, pre-calibration coordinates even when a
+matrix is active (verified on Trixie). Check that a matrix is loaded with
+`sudo libinput list-devices` and read the `Calibration:` line: digits there
 (rather than `identity matrix`) mean the hwdb matrix is applied.
+
+A loaded matrix is not the same as a correct one. On the MHS35 the touch
+axes can come out swapped relative to the display (taps mirrored across the
+diagonal), which a scale-and-offset matrix cannot fix. Measure where taps
+actually land: `steps/03-calibrate-touch.sh` does this in its check round.
+See the README's "Touch calibration" section.
 
 ## Performance expectations
 
-An SPI-attached 480×320 panel at 32 MHz sustains roughly 15–25 FPS. This is
-the bus bandwidth limit, not a configuration problem. The panel is suitable
-for status displays and simple controls, not video or fast interaction.
+The `ili9486` DRM driver reports a placeholder refresh of 0.007 Hz. Left
+alone, Chromium paces itself by it and draws about once per second.
+`steps/04-persist.sh` sets a 30 Hz custom mode. With that, measured in Chromium
+at 480×320: full-screen repaints reach ~10.7 fps (the 32 MHz SPI bus limit:
+~2.5 Mbit per 16-bit frame, ~13 frames/s before overhead), and small updates
+~27 fps. The panel suits status displays, controls and kiosk UIs, not video.

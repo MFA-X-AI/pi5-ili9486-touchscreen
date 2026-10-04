@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Change display rotation (matches LCD-show's rotate.sh invocation):
 #   sudo ./rotate.sh [0|90|180|270]
-# No reboot: the compositor transform rotates the output. Touch input is not
-# re-mapped for the new rotation; only the default (90) is verified, see README.
+# Log out/in to apply: the compositor transform rotates the output. labwc applies
+# the same transform to touch input, so a calibration made with
+# steps/03-calibrate-touch.sh should stay valid; only the default (90) is verified
+# on hardware, see README.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
